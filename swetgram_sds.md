@@ -5,7 +5,7 @@
 **Product:** Swetgram  
 **Document Type:** Company Design System Specification  
 **Platforms:** Android, iOS  
-**Client Strategy:** Kotlin Multiplatform + Compose Multiplatform  
+**Client Strategy:** Two separate native apps — Android (Kotlin + Jetpack Compose) and iOS (Swift + SwiftUI), no shared code  
 **Last Updated:** 2026-07-07
 
 ---
@@ -1489,41 +1489,62 @@ If reduced motion is enabled:
 
 ### 23.1 Cross-Platform Philosophy
 
-Swetgram should feel like one product across Android and iOS, while respecting platform expectations.
+Swetgram should feel like one product across Android and iOS, while respecting platform expectations. Android and iOS are built as two fully separate native codebases with no shared UI or logic layer, so this document (the SDS) is the mechanism that keeps them visually and behaviorally consistent — not shared code.
 
 Rules:
 
-- Shared design language across both platforms.
+- Shared design language across both platforms, enforced through this document rather than a shared component library.
 - Respect safe areas on iOS.
 - Respect Android back behavior.
 - Use native-feeling keyboard and input behavior.
 - Do not force iOS patterns onto Android or Android patterns onto iOS when they conflict with usability.
+- Any visual or interaction change to a component must be applied to both platforms' native implementations; design review should check both, not assume parity.
 
-### 23.2 Compose Multiplatform Implementation
+### 23.2 Per-Platform Design System Implementation
 
-Recommended structure:
+Each platform implements its own native design-system layer, following the same structure conceptually.
+
+Android (Kotlin/Compose) recommended structure:
 
 ```text
-shared/
-  designsystem/
-    tokens/
-    theme/
-    components/
-    icons/
-    motion/
-  feature-auth/
-  feature-chats/
-  feature-discover/
-  feature-groups/
-  feature-profile/
-  core-ui/
+android/app/src/main/java/com/swetgram/design/
+  tokens/
+  theme/
+  components/
+  icons/
+  motion/
+
+feature-auth/
+feature-chats/
+feature-discover/
+feature-groups/
+feature-profile/
+core-ui/
+```
+
+iOS (Swift/SwiftUI) recommended structure:
+
+```text
+ios/SwetgramApp/Sources/Design/
+  Tokens/
+  Theme/
+  Components/
+  Icons/
+  Motion/
+
+Feature/Auth/
+Feature/Chats/
+Feature/Discover/
+Feature/Groups/
+Feature/Profile/
+CoreUI/
 ```
 
 ### 23.3 Token Naming in Code
 
-Use semantic tokens, not raw colors, in UI code.
+Use semantic tokens, not raw colors, in UI code — on both platforms.
 
-Good:
+Good (Android/Kotlin):
 
 ```kotlin
 SwetgramTheme.colors.background
@@ -1532,20 +1553,40 @@ SwetgramTheme.colors.accent
 SwetgramTheme.colors.textPrimary
 ```
 
-Bad:
+Bad (Android/Kotlin):
 
 ```kotlin
 Color(0xFF3B82F6)
 Color.Black
 ```
 
-Raw values should live only inside the design token layer.
+Good (iOS/Swift):
+
+```swift
+SwetgramTheme.colors.background
+SwetgramTheme.colors.surface
+SwetgramTheme.colors.accent
+SwetgramTheme.colors.textPrimary
+```
+
+Bad (iOS/Swift):
+
+```swift
+Color(hex: 0x3B82F6)
+Color.black
+```
+
+Raw values should live only inside each platform's design token layer.
 
 ---
 
 ## 24. Design Tokens for Implementation
 
-### 24.1 Kotlin Token Example
+Since Android and iOS are separate native codebases, each platform defines and owns its own copy of these tokens. Values must match exactly between platforms — only the syntax differs.
+
+### 24.1 Color Tokens
+
+Android (Kotlin):
 
 ```kotlin
 object SwetgramColorTokens {
@@ -1566,7 +1607,30 @@ object SwetgramColorTokens {
 }
 ```
 
-### 24.2 Spacing Token Example
+iOS (Swift):
+
+```swift
+enum SwetgramColorTokens {
+    static let brandBlackAbsolute = Color(hex: 0x000000)
+    static let brandGraphite = Color(hex: 0x262223)
+    static let accentBlue = Color(hex: 0x3B82F6)
+
+    static let darkBackgroundDeep = Color(hex: 0x000000)
+    static let darkBackground = Color(hex: 0x0B0B0B)
+    static let darkSurface = Color(hex: 0x171717)
+    static let darkCard = Color(hex: 0x222222)
+    static let darkBorder = Color(hex: 0x2E2E2E)
+
+    static let lightBackground = Color(hex: 0xFAFAFA)
+    static let lightSurface = Color(hex: 0xFFFFFF)
+    static let lightCard = Color(hex: 0xF3F4F6)
+    static let lightBorder = Color(hex: 0xE5E7EB)
+}
+```
+
+### 24.2 Spacing Tokens
+
+Android (Kotlin):
 
 ```kotlin
 object SwetgramSpacing {
@@ -1580,7 +1644,23 @@ object SwetgramSpacing {
 }
 ```
 
-### 24.3 Radius Token Example
+iOS (Swift):
+
+```swift
+enum SwetgramSpacing {
+    static let zero: CGFloat = 0
+    static let xs: CGFloat = 4
+    static let sm: CGFloat = 8
+    static let md: CGFloat = 16
+    static let lg: CGFloat = 24
+    static let xl: CGFloat = 32
+    static let xxl: CGFloat = 48
+}
+```
+
+### 24.3 Radius Tokens
+
+Android (Kotlin):
 
 ```kotlin
 object SwetgramRadius {
@@ -1592,6 +1672,23 @@ object SwetgramRadius {
     val Full = 999.dp
 }
 ```
+
+iOS (Swift):
+
+```swift
+enum SwetgramRadius {
+    static let xs: CGFloat = 6
+    static let sm: CGFloat = 10
+    static let md: CGFloat = 16
+    static let lg: CGFloat = 20
+    static let xl: CGFloat = 24
+    static let full: CGFloat = 999
+}
+```
+
+### 24.4 Keeping Tokens in Sync
+
+Since these values are duplicated by hand across two codebases, treat this SDS as the single source of truth: any token change must be updated here first, then mirrored into both the Android and iOS token files in the same release. Consider a lightweight process (e.g., a shared token JSON/YAML file used to generate or cross-check both native files) if drift becomes a recurring problem.
 
 ---
 

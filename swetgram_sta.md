@@ -11,7 +11,7 @@
 
 ## 0. Executive Summary
 
-Swetgram is a cross-platform messenger for Android and iOS. The product combines fast private messaging, group communities, and a lightweight public text-based discovery surface called **Discover**.
+Swetgram is a messenger available on Android and iOS as two independent, fully native applications. The product combines fast private messaging, group communities, and a lightweight public text-based discovery surface called **Discover**.
 
 The technical architecture is optimized for:
 
@@ -23,7 +23,7 @@ The technical architecture is optimized for:
 - future migration from home server / staging to a production Hetzner EU VPS;
 - privacy-conscious account creation using email + username instead of phone numbers.
 
-The chosen architecture is a **modular monolith backend** written in Go, with PostgreSQL as the source of truth, Centrifugo for realtime delivery, Cloudflare R2 for media, and Kotlin Multiplatform + Compose Multiplatform for the mobile client.
+The chosen architecture is a **modular monolith backend** written in Go, with PostgreSQL as the source of truth, Centrifugo for realtime delivery, and Cloudflare R2 for media. The mobile client is split into two fully separate, fully native applications: **Android (Kotlin + Jetpack Compose)** and **iOS (Swift + SwiftUI)**, sharing no code. Both clients consume the same REST API and Centrifugo realtime contract, and both implement the Swetgram Design System independently.
 
 ---
 
@@ -40,12 +40,17 @@ The chosen architecture is a **modular monolith backend** written in Go, with Po
 | Database | PostgreSQL 16+ |
 | SQL layer | sqlc |
 | Realtime | Centrifugo |
-| Client | Kotlin Multiplatform + Compose Multiplatform |
-| Shared client scope | Shared logic + shared UI |
-| Networking | Ktor Client |
-| Local storage | SQLDelight |
-| Serialization | kotlinx.serialization |
-| DI | Koin |
+| Client strategy | Two fully separate native apps, no shared code |
+| Android client | Kotlin + Jetpack Compose |
+| iOS client | Swift + SwiftUI |
+| Android networking | Retrofit + OkHttp |
+| iOS networking | URLSession (Alamofire optional) |
+| Android local storage | Room |
+| iOS local storage | SwiftData (Core Data fallback) |
+| Android serialization | kotlinx.serialization / Moshi |
+| iOS serialization | Swift `Codable` |
+| Android DI | Hilt |
+| iOS DI | Swift native (constructor injection / lightweight container) |
 | Auth | JWT access token + rotating refresh token |
 | IDs | UUID v7 generated in backend application layer |
 | Media storage | Cloudflare R2 |
@@ -131,64 +136,83 @@ PostgreSQL 16+  <----------+
 - Clients do not write directly to Centrifugo for persistent entities.
 - The backend writes to PostgreSQL first, then publishes realtime events through Centrifugo.
 - Offline users receive push notifications through FCM/APNs.
-- Clients use local SQLDelight cache for fast UI and offline-friendly reads.
+- Each client uses its own native local database (Room on Android, SwiftData on iOS) as a cache for fast UI and offline-friendly reads.
 
 ---
 
 ## 4. Client Architecture
 
-### 4.1 Client Stack
+### 4.0 Separate Native Clients Decision
+
+Swetgram ships as **two fully independent, fully native applications** — one for Android, one for iOS. There is no shared module, no shared UI layer, and no shared business-logic layer between the two. Each platform team owns its full stack end to end.
+
+Reason:
+
+- native performance and platform-idiomatic UX on both OSes;
+- avoids Kotlin Multiplatform / Compose Multiplatform iOS-tooling risk (previously flagged as the top architecture risk);
+- each platform can use its ecosystem's mature, well-documented tooling instead of a cross-platform abstraction layer;
+- easier to hire for (native Android and native iOS engineers are a larger, more standard talent pool than KMP specialists);
+- platform teams can move at their own pace without one platform blocking the other.
+
+Trade-off accepted:
+
+- feature work is implemented twice (once per platform);
+- design and business-logic consistency must be enforced through documentation (this STA + the SDS) and process, not shared code;
+- two codebases to test, release, and maintain long-term.
+
+Both clients talk to the same REST API and the same Centrifugo realtime contract, so backend work is not duplicated — only client implementation is.
+
+### 4.1 Android Client Stack
 
 | Layer | Technology |
 |---|---|
 | Language | Kotlin |
-| Cross-platform | Kotlin Multiplatform |
-| UI | Compose Multiplatform |
-| HTTP | Ktor Client |
-| WebSocket / realtime client | Centrifugo client integration or Ktor WebSocket wrapper where appropriate |
-| JSON | kotlinx.serialization |
-| Local DB | SQLDelight |
+| UI | Jetpack Compose |
+| HTTP | Retrofit + OkHttp |
+| WebSocket / realtime client | Centrifugo Android SDK (or OkHttp WebSocket) |
+| JSON | kotlinx.serialization or Moshi |
+| Local DB | Room |
 | Async | Coroutines + Flow |
-| DI | Koin |
+| DI | Hilt |
 | State management | MVVM + StateFlow |
-| Navigation | Decompose-style component navigation or Compose Multiplatform navigation abstraction |
+| Navigation | Navigation Compose |
 
-### 4.2 Shared UI Decision
+### 4.2 iOS Client Stack
 
-Swetgram uses **shared UI + shared logic** for Android and iOS.
+| Layer | Technology |
+|---|---|
+| Language | Swift |
+| UI | SwiftUI |
+| HTTP | URLSession (Alamofire optional) |
+| WebSocket / realtime client | Centrifugo iOS SDK (or URLSessionWebSocketTask) |
+| JSON | Swift `Codable` |
+| Local DB | SwiftData (Core Data as fallback) |
+| Async | Swift Concurrency (async/await, `Task`) |
+| DI | Lightweight native container / constructor injection |
+| State management | MVVM + `@Observable` / `ObservableObject` |
+| Navigation | `NavigationStack` |
 
-Reason:
+### 4.3 Platform-Specific Concerns
 
-- faster MVP development;
-- consistent design across platforms;
-- fewer duplicate UI implementations;
-- easier design system enforcement;
-- smaller team requirement.
+Each client independently implements:
 
-Platform-specific code is still allowed for:
-
-- push notifications;
-- permissions;
-- image picker;
-- file picker;
-- secure token storage;
+- push notifications (FCM on Android, APNs on iOS);
+- permissions handling;
+- image/file picker;
+- secure token storage (Android Keystore / iOS Keychain);
 - system sharing;
 - app lifecycle integrations;
 - OS-specific settings shortcuts.
 
-### 4.3 Suggested Client Module Structure
+There is no cross-platform abstraction for these — each is written natively per platform.
+
+### 4.4 Suggested Android Module Structure
 
 ```text
-swetgram-mobile/
+swetgram-android/
 
-  shared/
-    build.gradle.kts
-
-    src/commonMain/kotlin/com/swetgram/
-      app/
-        SwetgramApp.kt
-        AppRootComponent.kt
-        AppRouter.kt
+  app/
+    src/main/java/com/swetgram/
 
       core/
         network/
@@ -222,29 +246,59 @@ swetgram-mobile/
         search/
         notifications/
         moderation/
-
-    src/androidMain/kotlin/
-      platform/
-        PushAndroid.kt
-        SecureStorageAndroid.kt
-        ImagePickerAndroid.kt
-
-    src/iosMain/kotlin/
-      platform/
-        PushIos.kt
-        SecureStorageIos.kt
-        ImagePickerIos.kt
-
-  androidApp/
-    src/main/
-
-  iosApp/
-    iosApp.xcodeproj
 ```
 
-### 4.4 Client Layering
+### 4.5 Suggested iOS Module Structure
 
-Each feature should follow this structure:
+```text
+swetgram-ios/
+
+  SwetgramApp/
+    Sources/
+
+      Core/
+        Network/
+        Realtime/
+        Database/
+        Auth/
+        Storage/
+        Analytics/
+        Logging/
+        Errors/
+        Time/
+        Permissions/
+
+      Design/
+        Colors/
+        Typography/
+        Spacing/
+        Icons/
+        Components/
+        Theme/
+        Motion/
+
+      Feature/
+        Auth/
+        Chats/
+        Chat/
+        Discover/
+        Groups/
+        Profile/
+        Settings/
+        Search/
+        Notifications/
+        Moderation/
+
+  SwetgramApp.xcodeproj
+```
+
+Both repositories mirror the same top-level grouping (`core`/`design`/`feature`) so that parity between platforms is easy to audit even without shared code.
+
+### 4.6 Client Layering
+
+Each feature, on both platforms, should follow the same conceptual structure — only the syntax differs.
+
+Android example:
 
 ```text
 feature/chats/
@@ -263,19 +317,38 @@ feature/chats/
     components/
 ```
 
-Rules:
+iOS example:
 
-- UI never calls API directly.
+```text
+Feature/Chats/
+  Data/
+    ChatsAPI.swift
+    ChatsLocalDataSource.swift
+    ChatsRepositoryImpl.swift
+  Domain/
+    Model/
+    Repository/
+    UseCase/
+  Presentation/
+    ChatsViewModel.swift
+    ChatsUiState.swift
+    ChatsScreen.swift
+    Components/
+```
+
+Rules (apply to both platforms):
+
+- UI never calls the API directly.
 - ViewModel talks to use cases or repositories.
 - Repository decides whether data comes from network or local DB.
 - Local DB is used for chat list, messages, user profile cache, group cache, and draft state.
 - API DTOs are separate from domain models.
 
-### 4.5 Client State Model
+### 4.7 Client State Model
 
-Each screen uses a single immutable UI state.
+Each screen uses a single immutable UI state on both platforms.
 
-Example:
+Android (Kotlin):
 
 ```kotlin
 data class ChatsUiState(
@@ -288,9 +361,22 @@ data class ChatsUiState(
 )
 ```
 
-### 4.6 Offline Behavior
+iOS (Swift):
 
-v1 should support basic offline behavior:
+```swift
+struct ChatsUiState {
+    var isLoading: Bool = false
+    var searchQuery: String = ""
+    var pinnedChats: [ChatListItem] = []
+    var chats: [ChatListItem] = []
+    var archivedCount: Int = 0
+    var error: UiError? = nil
+}
+```
+
+### 4.8 Offline Behavior
+
+v1 should support basic offline behavior on both platforms:
 
 - show cached chat list;
 - show cached messages;
@@ -298,7 +384,7 @@ v1 should support basic offline behavior:
 - allow typing drafts locally;
 - queue outgoing messages only if feasible; otherwise show clear failed-send state.
 
-For MVP, offline sending is optional. Failed messages should remain visible with retry action.
+For MVP, offline sending is optional. Failed messages should remain visible with retry action. Offline behavior parity between Android and iOS should be checked explicitly in QA, since there is no shared implementation to guarantee it automatically.
 
 ---
 
@@ -1797,12 +1883,13 @@ Before MVP beta:
 
 ### Phase 0 — Foundation
 
-- repository setup;
+- repository setup (backend, Android, iOS as separate repos);
 - Docker Compose;
 - PostgreSQL migrations;
 - Go API skeleton;
-- KMP app skeleton;
-- CI pipeline;
+- Android app skeleton;
+- iOS app skeleton;
+- CI pipeline (backend, Android, iOS);
 - logging/health checks.
 
 ### Phase 1 — Auth & Profile
@@ -1870,7 +1957,7 @@ Before MVP beta:
 
 Swetgram MVP technical architecture is acceptable when:
 
-- Android and iOS clients share core UI and business logic.
+- Android and iOS clients are fully native, independently implemented, and maintain feature and design parity per the SDS.
 - Users can register with email + username + password.
 - Access tokens are short-lived and refresh tokens rotate.
 - Users can send and receive realtime direct messages.
@@ -1892,18 +1979,32 @@ Swetgram MVP technical architecture is acceptable when:
 
 ## 31. Key Risks
 
-### 31.1 KMP + Compose Multiplatform Complexity
+### 31.1 Duplicated Work Across Two Native Codebases
 
 Risk:
 
-- iOS-specific issues may slow development.
+- every feature is built twice, doubling client engineering effort versus a shared-code approach;
+- Android and iOS can drift out of sync in behavior, timing, or edge-case handling;
+- design system (SDS) can be implemented inconsistently between platforms since there is no shared token/component layer enforcing it.
 
 Mitigation:
 
-- keep UI simple;
-- avoid complex platform-specific UI patterns;
-- isolate platform APIs behind interfaces;
-- test iOS early, not at the end.
+- treat the SDS as the single source of truth for both platforms and review both implementations against it;
+- maintain a shared, versioned API contract (OpenAPI/schema) so both clients build against the same backend behavior;
+- keep a feature-parity checklist per release; QA explicitly signs off on both platforms before ship;
+- staff or rotate engineers with context on both platforms where possible to reduce drift;
+- prefer simple, well-established native patterns over clever platform-specific shortcuts that are hard to mirror.
+
+### 31.1b Native iOS/Android Skill Requirement
+
+Risk:
+
+- requires genuinely separate Android and iOS engineering skill sets (previously one KMP-capable team could cover both); hiring or contracting for two specialties instead of one.
+
+Mitigation:
+
+- budget for two platform owners (or one engineer per platform at minimum) rather than a single mobile generalist;
+- document shared product/business logic decisions in this STA so platform teams implement matching behavior independently.
 
 ### 31.2 Home Server Reliability
 
@@ -1964,7 +2065,7 @@ Mitigation:
 
 These decisions are not blocking MVP architecture, but should be resolved before implementation or beta:
 
-1. Exact KMP navigation library.
+1. Confirm Navigation Compose (Android) and NavigationStack (iOS) as final navigation approaches.
 2. Exact iOS push integration approach.
 3. Whether to support offline outgoing message queue in v1.
 4. Whether media URLs are public, signed, or proxied.
@@ -1989,21 +2090,23 @@ Swetgram engineering should follow these rules:
 6. Do not claim E2E before E2E exists.
 7. Keep modules clean and replaceable.
 8. Prefer boring infrastructure for v1.
-9. Test iOS early.
+9. Keep Android and iOS in feature and design parity even without shared code.
 10. Backups are a product feature, not an ops detail.
 
 ---
 
 ## 34. Reference Stack Notes
 
-This STA aligns with the existing Swetgram v1 architecture direction: Go + Fiber, PostgreSQL, sqlc, Centrifugo, R2, JWT, Argon2id, Docker Compose, and EU deployment. The product model has been updated from marketplace/listings to Discover text posts and group Discover.
+This STA aligns with the existing Swetgram v1 architecture direction: Go + Fiber, PostgreSQL, sqlc, Centrifugo, R2, JWT, Argon2id, Docker Compose, and EU deployment. The product model has been updated from marketplace/listings to Discover text posts and group Discover. The mobile client direction has been updated from a shared Kotlin Multiplatform + Compose Multiplatform app to two fully separate native applications.
 
 Useful external references for implementation:
 
-- Kotlin Multiplatform / Compose Multiplatform official documentation: https://kotlinlang.org/docs/multiplatform/quickstart.html
-- Kotlin Multiplatform overview: https://kotlinlang.org/multiplatform/
-- Ktor Client documentation: https://ktor.io/docs/welcome.html
-- Ktor Client WebSockets: https://ktor.io/docs/client-websockets.html
+- Jetpack Compose documentation: https://developer.android.com/jetpack/compose
+- Android Retrofit documentation: https://square.github.io/retrofit/
+- Android Room documentation: https://developer.android.com/training/data-storage/room
+- SwiftUI documentation: https://developer.apple.com/documentation/swiftui/
+- Swift Concurrency documentation: https://docs.swift.org/swift-book/documentation/the-swift-programming-language/concurrency/
+- SwiftData documentation: https://developer.apple.com/documentation/swiftdata
 - Centrifugo documentation: https://centrifugal.dev/docs/getting-started/introduction
 - Centrifugo WebSocket transport: https://centrifugal.dev/docs/transports/websocket
 - Fiber documentation: https://gofiber.io/
